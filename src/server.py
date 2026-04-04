@@ -1,4 +1,4 @@
-"""Real-time multimodal AI demo with Gemma 4 E2B + Kokoro TTS (mlx-audio)."""
+"""Real-time multimodal AI demo with Gemma 4 E2B + Kokoro TTS."""
 
 import asyncio
 import base64
@@ -15,6 +15,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 
 import litert_lm
+import tts
 
 MODEL_PATH = os.environ.get(
     "MODEL_PATH",
@@ -31,12 +32,11 @@ SENTENCE_SPLIT_RE = re.compile(r'(?<=[.!?])\s+')
 
 app = FastAPI()
 engine = None
-tts_model = None
-tts_sample_rate = 24000
+tts_backend = None
 
 
 def load_models():
-    global engine, tts_model, tts_sample_rate
+    global engine, tts_backend
     print(f"Loading Gemma 4 E2B from {MODEL_PATH}...")
     engine = litert_lm.Engine(
         MODEL_PATH,
@@ -47,13 +47,7 @@ def load_models():
     engine.__enter__()
     print("Engine loaded.")
 
-    from mlx_audio.tts.generate import load_model
-    print("Loading mlx-audio Kokoro...")
-    tts_model = load_model("mlx-community/Kokoro-82M-bf16")
-    tts_sample_rate = tts_model.sample_rate
-    # Warmup to trigger pipeline init (phonemizer, spacy, etc.)
-    list(tts_model.generate(text="Hello", voice="af_heart", speed=1.0))
-    print(f"Kokoro TTS loaded (mlx-audio, sample_rate={tts_sample_rate}).")
+    tts_backend = tts.load()
 
 
 def save_temp(data: bytes, suffix: str) -> str:
@@ -67,12 +61,6 @@ def split_sentences(text: str) -> list[str]:
     """Split text into sentences for streaming TTS."""
     parts = SENTENCE_SPLIT_RE.split(text.strip())
     return [s.strip() for s in parts if s.strip()]
-
-
-def tts_sentence(text: str, voice: str = "af_heart", speed: float = 1.1) -> np.ndarray:
-    """Generate audio for a single sentence using mlx-audio."""
-    results = list(tts_model.generate(text=text, voice=voice, speed=speed))
-    return np.concatenate([np.array(r.audio) for r in results])
 
 
 @app.on_event("startup")
@@ -201,7 +189,7 @@ async def websocket_endpoint(ws: WebSocket):
                 # Signal start of audio stream
                 await ws.send_text(json.dumps({
                     "type": "audio_start",
-                    "sample_rate": tts_sample_rate,
+                    "sample_rate": tts_backend.sample_rate,
                     "sentence_count": len(sentences),
                 }))
 
@@ -212,7 +200,7 @@ async def websocket_endpoint(ws: WebSocket):
 
                     # Generate audio for this sentence
                     pcm = await asyncio.get_event_loop().run_in_executor(
-                        None, lambda s=sentence: tts_sentence(s)
+                        None, lambda s=sentence: tts_backend.generate(s)
                     )
 
                     if interrupted.is_set():
