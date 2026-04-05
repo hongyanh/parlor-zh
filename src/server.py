@@ -1,10 +1,11 @@
-"""Real-time multimodal AI demo with Gemma 4 E2B + Kokoro TTS."""
+"""Parlor — on-device, real-time multimodal AI (voice + vision)."""
 
 import asyncio
 import base64
 import json
 import os
 import re
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -17,10 +18,12 @@ from fastapi.responses import HTMLResponse
 import litert_lm
 import tts
 
-MODEL_PATH = os.environ.get(
-    "MODEL_PATH",
-    os.path.expanduser("~/workspace/LiteRT-LM/run_dir/gemma-4-E2B-it.litertlm"),
-)
+MODEL_PATH = os.environ.get("MODEL_PATH", "")
+if not MODEL_PATH:
+    print("ERROR: MODEL_PATH environment variable is required.")
+    print("  Download the model:  litert-lm download litert-community/gemma-4-E2B-it-litert-lm")
+    print("  Then run:            MODEL_PATH=/path/to/gemma-4-E2B-it.litertlm uv run python server.py")
+    sys.exit(1)
 SYSTEM_PROMPT = (
     "You are a friendly, conversational AI assistant. The user is talking to you "
     "through a microphone and showing you their camera. "
@@ -236,4 +239,5 @@ async def websocket_endpoint(ws: WebSocket):
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)

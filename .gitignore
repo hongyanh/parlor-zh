@@ -7,8 +7,6 @@ dist/
 wheels/
 *.egg-info
 
-# uv
-uv.lock
 
 # Models (too large for git)
 *.onnx

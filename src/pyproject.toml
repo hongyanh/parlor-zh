@@ -1,8 +1,7 @@
 [project]
-name = "src"
+name = "parlor"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
+description = "On-device, real-time multimodal AI — have natural voice + vision conversations, fully local and private"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.135.3",
