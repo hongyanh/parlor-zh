@@ -614,7 +614,7 @@ function connect() {
   ws = new WebSocket(`ws://${location.host}/ws`);
   ws.onopen = () => {
     setStatus('connected', 'Connected');
-    if (state !== 'loading') setState('listening');
+    setState('listening');
   };
   ws.onclose = () => {
     setStatus('disconnected', 'Disconnected');
@@ -826,49 +826,75 @@ cameraToggle.addEventListener('click', () => {
 });
 
 // ── Init ──
+
+// Connect WebSocket immediately — don't wait for camera/VAD
+connect();
+
+// Start waveform immediately (shows ambient animation even before mic is ready)
+initWaveformCanvas();
+window.addEventListener('resize', initWaveformCanvas);
+drawWaveform();
+
 async function init() {
-  initWaveformCanvas();
-  window.addEventListener('resize', initWaveformCanvas);
-
   await startCamera();
-  connect();
 
-  // Initialize VAD with shared mic stream
-  myvad = await vad.MicVAD.new({
-    getStream: async () => new MediaStream(mediaStream.getAudioTracks()),
-    positiveSpeechThreshold: 0.5,
-    negativeSpeechThreshold: 0.25,
-    redemptionMs: 600,
-    minSpeechMs: 300,
-    preSpeechPadMs: 300,
-    onSpeechStart: handleSpeechStart,
-    onSpeechEnd: handleSpeechEnd,
-    onVADMisfire: () => { console.log('VAD misfire (too short)'); },
-    onnxWASMBasePath: "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/",
-    baseAssetPath: "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/",
-  });
+  // Check if we got audio tracks
+  const hasAudio = mediaStream && mediaStream.getAudioTracks().length > 0;
+  if (!hasAudio) {
+    console.error('No microphone access — check browser and macOS microphone permissions');
+    addMessage('assistant', 'Microphone not available. Please grant microphone permission in your browser and in macOS System Settings > Privacy & Security > Microphone, then reload.', '');
+  }
 
-  myvad.start();
-
-  // Init audio context on first user gesture for mic visualizer
-  // (browsers require user interaction to create AudioContext)
-  const initAudio = () => {
-    ensureAudioCtx();
-    if (audioCtx.state === 'suspended') audioCtx.resume();
-    document.removeEventListener('click', initAudio);
-    document.removeEventListener('keydown', initAudio);
-  };
-  document.addEventListener('click', initAudio);
-  document.addEventListener('keydown', initAudio);
-  // Also try immediately (may work if page had prior interaction)
+  // Set up AudioContext and connect mic to waveform analyser
   ensureAudioCtx();
+  if (audioCtx.state === 'suspended') {
+    // getUserMedia prompt counts as user gesture in most browsers
+    try { await audioCtx.resume(); } catch {}
+  }
+  if (hasAudio) {
+    micSource = audioCtx.createMediaStreamSource(mediaStream);
+    try { micSource.connect(analyser); } catch {}
+  }
+
+  // Also resume on any future click/keydown (fallback for browsers that need explicit gesture)
+  const resumeAudio = () => {
+    if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+    // Reconnect mic to analyser in case it wasn't connected before
+    if (hasAudio && mediaStream && analyser) {
+      if (!micSource) micSource = audioCtx.createMediaStreamSource(mediaStream);
+      try { micSource.connect(analyser); } catch {}
+    }
+    document.removeEventListener('click', resumeAudio);
+    document.removeEventListener('keydown', resumeAudio);
+  };
+  document.addEventListener('click', resumeAudio);
+  document.addEventListener('keydown', resumeAudio);
+
+  // Initialize VAD for speech detection
+  if (hasAudio) {
+    try {
+      myvad = await vad.MicVAD.new({
+        getStream: async () => new MediaStream(mediaStream.getAudioTracks()),
+        positiveSpeechThreshold: 0.5,
+        negativeSpeechThreshold: 0.25,
+        redemptionMs: 600,
+        minSpeechMs: 300,
+        preSpeechPadMs: 300,
+        onSpeechStart: handleSpeechStart,
+        onSpeechEnd: handleSpeechEnd,
+        onVADMisfire: () => { console.log('VAD misfire (too short)'); },
+        onnxWASMBasePath: "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/",
+        baseAssetPath: "https://cdn.jsdelivr.net/npm/@ricky0123/vad-web@0.0.29/dist/",
+      });
+      myvad.start();
+      console.log('VAD initialized and listening');
+    } catch (e) {
+      console.error('VAD initialization failed:', e);
+      addMessage('assistant', 'Voice detection failed to initialize: ' + e.message, '');
+    }
+  }
 
   setState('listening');
-
-  // Start waveform loop
-  drawWaveform();
-
-  console.log('VAD initialized and listening');
 }
 
 init();
