@@ -2,10 +2,30 @@
 
 import os
 import platform
+import re
 import sys
 from pathlib import Path
 
 import numpy as np
+
+# Chinese Unicode ranges
+_CHINESE_RE = re.compile(
+    r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]"
+)
+
+DEFAULT_VOICE_EN = "af_heart"
+DEFAULT_VOICE_ZH = "zf_xiaobei"
+
+
+def _detect_voice(text: str) -> str:
+    """Auto-detect language and return appropriate voice."""
+    chinese_chars = len(_CHINESE_RE.findall(text))
+    total_alpha = sum(1 for c in text if c.isalpha())
+    if total_alpha == 0:
+        return DEFAULT_VOICE_EN
+    if chinese_chars / total_alpha > 0.3:
+        return DEFAULT_VOICE_ZH
+    return DEFAULT_VOICE_EN
 
 
 def _is_apple_silicon() -> bool:
@@ -17,7 +37,7 @@ class TTSBackend:
 
     sample_rate: int = 24000
 
-    def generate(self, text: str, voice: str = "af_heart", speed: float = 1.1) -> np.ndarray:
+    def generate(self, text: str, voice: str | None = None, speed: float = 1.1) -> np.ndarray:
         raise NotImplementedError
 
 
@@ -30,10 +50,13 @@ class MLXBackend(TTSBackend):
         self._model = load_model("mlx-community/Kokoro-82M-bf16")
         self.sample_rate = self._model.sample_rate
         # Warmup: triggers pipeline init (phonemizer, spacy, etc.)
-        list(self._model.generate(text="Hello", voice="af_heart", speed=1.0))
+        list(self._model.generate(text="Hello", voice=DEFAULT_VOICE_EN, speed=1.0))
 
-    def generate(self, text: str, voice: str = "af_heart", speed: float = 1.1) -> np.ndarray:
-        results = list(self._model.generate(text=text, voice=voice, speed=speed))
+    def generate(self, text: str, voice: str | None = None, speed: float = 1.1) -> np.ndarray:
+        if voice is None:
+            voice = _detect_voice(text)
+        lang_code = voice[0]  # first char of voice name: 'a'=English, 'z'=Chinese, etc.
+        results = list(self._model.generate(text=text, voice=voice, speed=speed, lang_code=lang_code))
         return np.concatenate([np.array(r.audio) for r in results])
 
 
@@ -50,7 +73,9 @@ class ONNXBackend(TTSBackend):
         self._model = kokoro_onnx.Kokoro(model_path, voices_path)
         self.sample_rate = 24000
 
-    def generate(self, text: str, voice: str = "af_heart", speed: float = 1.1) -> np.ndarray:
+    def generate(self, text: str, voice: str | None = None, speed: float = 1.1) -> np.ndarray:
+        if voice is None:
+            voice = _detect_voice(text)
         pcm, _sr = self._model.create(text, voice=voice, speed=speed)
         return pcm
 
